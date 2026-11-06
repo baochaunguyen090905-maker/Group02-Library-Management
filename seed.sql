@@ -1,4 +1,16 @@
+-- DE 05 | PART B - SAMPLE DATA AND VALIDATION
+-- Run schema.sql first on a FRESH empty database, then run this file once.
+-- Extended coursework dataset: synthetic IDs and monetary values; designed to test edge cases.
+-- REVISED: corrected five operational circulation overlaps in the original fixture.
+-- Dates changed only for loan_id 5, 17 and 28; status, all IDs, references,
+-- payment records and fine amounts remain unchanged.
+-- Operational overlap checking is OPTIONAL: the assignment explicitly exempts
+-- overlapping borrowing intervals. The enhanced check assumes a Completed loan
+-- occupies a copy from loan_date through return_date, an Active loan remains open,
+-- and Pending/Cancelled requests do not occupy the physical copy.
+USE library_mini;
 
+-- Parent tables first
 INSERT INTO categories (category_id, name) VALUES
 (1,'Literature'),(2,'Science'),(3,'Technology'),(4,'History'),(5,'Business');
 
@@ -30,7 +42,7 @@ INSERT INTO loans (loan_id, reader_id, copy_id, loan_date, status, due_date) VAL
 (2,1,2,'2025-02-03','Completed','2025-02-17'),
 (3,1,3,'2025-03-05','Completed','2025-03-19'),
 (4,1,4,'2025-04-02','Completed','2025-04-16'),
-(5,2,1,'2025-01-09','Completed','2025-01-23'),
+(5,2,1,'2025-01-23','Completed','2025-01-24'),
 (6,3,2,'2025-01-15','Completed','2025-01-29'),
 (7,4,3,'2025-02-10','Completed','2025-02-24'),
 (8,5,4,'2025-03-08','Completed','2025-03-22'),
@@ -42,7 +54,7 @@ INSERT INTO loans (loan_id, reader_id, copy_id, loan_date, status, due_date) VAL
 (14,2,4,'2025-09-09','Completed','2025-09-23'),
 (15,3,5,'2025-12-02','Completed','2025-12-16'),
 (16,4,1,'2025-01-20','Pending','2025-02-03'),
-(17,5,2,'2025-02-21','Active','2025-03-07'),
+(17,5,2,'2026-10-24','Active','2026-11-07'),
 (18,6,3,'2025-03-25','Cancelled','2025-04-08'),
 (19,7,4,'2025-10-03','Active','2025-10-17'),
 (20,8,7,'2024-11-10','Pending','2024-11-24');
@@ -93,6 +105,8 @@ INSERT INTO readers (reader_id,full_name,dob,phone) VALUES
 (12,'Phan Quynh','2001-11-09','0901000012');
 
 -- Edge periods: 2024, the first/last days of Q1-2025, and 2026.
+-- Active loans 17 and 28 are dated after the most recent returns of their respective copies.
+-- Loan 5 begins after loan 1 returns copy 1, while remaining late and paid after return.
 -- Category Business (copy 6/7) remains without Q1-2025 transactions.
 INSERT INTO loans (loan_id,reader_id,copy_id,loan_date,status,due_date) VALUES
 (21,2,7,'2024-12-20','Completed','2025-01-03'),
@@ -102,7 +116,7 @@ INSERT INTO loans (loan_id,reader_id,copy_id,loan_date,status,due_date) VALUES
 (25,6,2,'2025-12-31','Completed','2026-01-14'),
 (26,12,5,'2025-07-11','Cancelled','2025-07-25'),
 (27,12,1,'2026-02-02','Pending','2026-02-16'),
-(28,9,6,'2024-08-11','Active','2024-08-25');
+(28,9,6,'2026-10-25','Active','2026-11-08');
 -- Only the five newly Completed loans receive return records.
 INSERT INTO return_records (return_id,loan_id,return_date,condition_note,fine_amount) VALUES
 (16,21,'2025-01-06','Returned late (cross-year loan)',18.00),
@@ -193,12 +207,41 @@ FROM readers r LEFT JOIN
   ON f.reader_id=r.reader_id
 GROUP BY r.reader_id,r.full_name ORDER BY outstanding_debt DESC,r.reader_id;
 
--- 8: optional diagnostic: 2025 transactions by month and status.
+-- 8: OPTIONAL physical-copy circulation audit (zero rows expected).
+-- This is an extra operational-quality check, NOT a rubric requirement.
+-- Only Completed/Active loans are treated as physically holding a copy.
+-- Completed loans end on return_date; Active loans have no confirmed end.
+-- Inclusive intervals make same-day return/reissue a conservative overlap.
+SELECT a.copy_id,
+       a.loan_id AS earlier_loan_id, a.status AS earlier_status,
+       a.loan_date AS earlier_loan_date, ra.return_date AS earlier_return_date,
+       b.loan_id AS later_loan_id, b.status AS later_status,
+       b.loan_date AS later_loan_date, rb.return_date AS later_return_date
+FROM loans a
+JOIN loans b ON b.copy_id = a.copy_id AND a.loan_id < b.loan_id
+LEFT JOIN return_records ra ON ra.loan_id = a.loan_id
+LEFT JOIN return_records rb ON rb.loan_id = b.loan_id
+WHERE a.status IN ('Completed','Active')
+  AND b.status IN ('Completed','Active')
+  AND a.loan_date <= COALESCE(rb.return_date, '9999-12-31')
+  AND b.loan_date <= COALESCE(ra.return_date, '9999-12-31')
+ORDER BY a.copy_id, a.loan_id, b.loan_id;
+
+-- 9: optional diagnostic: 2025 transactions by month and status.
 SELECT MONTH(loan_date) AS loan_month,status,COUNT(*) AS loans_count
 FROM loans WHERE loan_date>='2025-01-01' AND loan_date<'2026-01-01'
 GROUP BY MONTH(loan_date),status ORDER BY loan_month,status;
 
--- 9: summary of fines and payments: these are different event timelines.
+-- 10: summary of fines and payments: these are different event timelines.
 SELECT 'Fine confirmations (all years)' AS metric,COALESCE(SUM(fine_amount),0) AS amount FROM return_records
 UNION ALL SELECT 'Payments received (all years)',COALESCE(SUM(amount),0) FROM payments;
 
+-- NEGATIVE TESTS: kept commented so seed.sql executes without intentional errors.
+-- INSERT INTO copies(title,author,barcode,category_id) VALUES('Duplicate','X','LIB001',1); -- UNIQUE barcode
+-- INSERT INTO loans(reader_id,copy_id,loan_date,status,due_date) VALUES(999,1,'2025-01-01','Pending','2025-01-15'); -- invalid FK
+-- INSERT INTO loans(reader_id,copy_id,loan_date,status,due_date) VALUES(1,1,'2025-01-20','Pending','2025-01-10'); -- invalid dates CHECK
+-- INSERT INTO return_records(loan_id,return_date,fine_amount) VALUES(1,'2025-01-23',5); -- UNIQUE loan_id
+-- INSERT INTO return_records(loan_id,return_date,fine_amount) VALUES(16,'2025-02-01',-1); -- negative fee CHECK
+-- INSERT INTO payments(loan_id,amount,payment_date,method) VALUES(1,0,'2025-01-23 10:00:00','Cash'); -- amount CHECK
+-- NOTE: wrong status/return association and overpayment are cross-table business rules,
+--       demonstrated by validation SELECTs rather than enforced by the supplied schema.
